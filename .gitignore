@@ -1,3 +1,10 @@
+# Ignore all files with the .xdmf and .h5 extensions
+*.xdmf
+*.h5
+
+# Ignore all folders and their contents
+*/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
