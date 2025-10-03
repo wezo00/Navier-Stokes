@@ -47,7 +47,7 @@ y_min, y_max = 0.0, 1.0
 x_min, x_max = 0.0, 1.0
 
 # Poiseuille flow
-'''
+#'''
 def u_analytical(x):
     # x has shape (2, n_points)
     u = np.zeros((2, x.shape[1]))
