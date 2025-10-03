@@ -5,6 +5,9 @@
 # Ignore all folders and their contents
 */
 
+# Ignore book pdf
+*.pdf
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
