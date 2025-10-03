@@ -94,8 +94,6 @@ def tangential_proj(u: Expr, n: Expr):
     """
     return (ufl.Identity(u.ufl_shape[0]) - ufl.outer(n, n)) * u
 
-
-g_tau = tangential_proj(fem.Constant(msh, dolfinx.default_scalar_type(((0, 0), (0, 0)))) * n, n)
 boundaries = [
     (1, lambda x: np.isclose(x[0], x_min)),
     (2, lambda x: np.isclose(x[0], x_max)),

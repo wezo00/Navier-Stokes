@@ -31,16 +31,16 @@ def u_analytical(x):
     return u
 
 def p_analytical(x):
-    return (x[0]*x[1]*(1-x[0]-x[1]))[np.newaxis, :]  # shape (1, n_points)
+    return (x[0]*x[1]*(1-x[0]*x[1]))[np.newaxis, :]  # shape (1, n_points)
 
 def f_analytical(x):
     # x has shape (2, n_points)
     f = np.zeros((2, x.shape[1]))
     # compute forcing term from -Δu + ∇p
-    f[0] = (x[1]*(1 - 2*x[0]*x[1] - x[1]) 
-            - 2*np.pi**2*np.sin(np.pi*x[1])*np.cos(np.pi*x[1])*(np.cos(np.pi*x[0])**2 - 3*np.sin(np.pi*x[0])**2))
-    f[1] = (x[0]*(1 - 2*x[1]*x[0] - x[0]) 
-            - 2*np.pi**2*np.cos(np.pi*x[0])*np.sin(np.pi*x[0])*(np.cos(np.pi*x[1])**2 - 3*np.sin(np.pi*x[1])**2))
+    f[0] = (x[1]*(1 - 2*x[0]*x[1]) 
+                 - np.sin(2*np.pi*x[1])*(2*np.cos(2*np.pi*x[0])-1)*np.pi**2)
+    f[1] = (x[0]*(1 - 2*x[1]*x[0]) 
+                 - np.sin(2*np.pi*x[0])*(1-2*np.cos(2*np.pi*x[1]))*np.pi**2)
     return f
 
 y_min, y_max = 0.0, 1.0
@@ -56,7 +56,7 @@ def u_analytical(x):
     return u
 
 def p_analytical(x):
-    return (-2*x[0])[np.newaxis, :]  # shape (1, n_points)
+    return -(2*x[0])[np.newaxis, :]  # shape (1, n_points)
 
 def f_analytical(x):
     # x has shape (2, n_points)
@@ -66,7 +66,7 @@ def f_analytical(x):
 
 y_min, y_max = -1.0, 1.0
 x_min, x_max = -1.0, 1.0
-'''
+#'''
 #####################################################
 
 def get_L2_norm(u, msh):
@@ -103,7 +103,7 @@ def block_operators(a, a_p, L, bcs, V):
     null_vec.array[offset:] = 1.0
     null_vec.normalize()
     nsp = PETSc.NullSpace().create(vectors=[null_vec])
-    assert nsp.test(A)
+    assert nsp.test(A), "Nullspace vector does not test as nullspace for A"
     A.setNullSpace(nsp)
 
     return A, P, b
@@ -135,7 +135,7 @@ def block_iterative_solver(a, a_p, L, bcs, V, Q, msh):
     ksp = PETSc.KSP().create(msh.comm)
     ksp.setOperators(A, P)
     ksp.setTolerances(rtol=1e-9)
-    ksp.setType("minres")
+    ksp.setType("gmres")
     ksp.getPC().setType("fieldsplit")
     ksp.getPC().setFieldSplitType(PETSc.PC.CompositeType.ADDITIVE)
     ksp.getPC().setFieldSplitIS(("u", is_u), ("p", is_p))
@@ -165,16 +165,17 @@ def block_iterative_solver(a, a_p, L, bcs, V, Q, msh):
     its = ksp.getIterationNumber()
     reason = ksp.getConvergedReason()
     if MPI.COMM_WORLD.rank == 0:
-        print(f"[MINRES] Converged in {its} iterations (reason={reason})")
+        print(f"[GMRES] Converged in {its} iterations (reason={reason})")
 
     # Create Functions to split u and p
-    u, p = Function(V), Function(Q)
-    offset = V_map.size_local * V.dofmap.index_map_bs
-    u.x.array[:offset] = x.array_r[:offset]
-    p.x.array[: (len(x.array_r) - offset)] = x.array_r[offset:]
+    u_h, p_h = Function(V), Function(Q)
+    offset = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
+    offset_p = Q.dofmap.index_map.size_local * Q.dofmap.index_map_bs
+    u_h.x.array[:offset] = x.array_r[:offset]
+    p_h.x.array[:offset_p] = x.array_r[offset: (offset_p + offset)]
 
     # Compute the $L^2$ norms of the solution vectors
-    norm_u, norm_p = get_L2_norm(u, msh), get_L2_norm(p, msh)
+    norm_u, norm_p = get_L2_norm(u_h, msh), get_L2_norm(p_h, msh)
 
     if MPI.COMM_WORLD.rank == 0:
         print(f"(B) Norm of velocity coefficient vector (blocked, iterative): {norm_u}")
@@ -183,23 +184,25 @@ def block_iterative_solver(a, a_p, L, bcs, V, Q, msh):
     # Save solution to file in XDMF format for visualization, e.g. with
     # ParaView. Before writing to file, ghost values are updated using
     # `scatter_forward`.
-    with XDMFFile(MPI.COMM_WORLD, "out_stokes/velocity.xdmf", "w") as ufile_xdmf:
-        u.x.scatter_forward()
+    with XDMFFile(MPI.COMM_WORLD, "v_stokes.xdmf", "w") as ufile_xdmf:
+        u_h.x.scatter_forward()
         P1 = element(
-            "Lagrange", msh.basix_cell(), 1, shape=(msh.geometry.dim,), dtype=default_real_type
+            "Lagrange", msh.basix_cell(), 1, shape=(msh.geometry.dim,),
+            dtype=default_real_type
         )
         u1 = Function(functionspace(msh, P1))
-        u1.interpolate(u)
+        u1.interpolate(u_h)
+        u1.name = "Velocity"
         ufile_xdmf.write_mesh(msh)
         ufile_xdmf.write_function(u1)
 
-    with XDMFFile(MPI.COMM_WORLD, "out_stokes/pressure.xdmf", "w") as pfile_xdmf:
-        p.x.scatter_forward()
+    with XDMFFile(MPI.COMM_WORLD, "p_stokes.xdmf", "w") as pfile_xdmf:
+        p_h.x.scatter_forward()
+        p_h.name = "Pressure"
         pfile_xdmf.write_mesh(msh)
-        pfile_xdmf.write_function(p)
+        pfile_xdmf.write_function(p_h)
 
-    return norm_u, norm_p, u, p
-
+    return norm_u, norm_p, u_h, p_h
 
 # ### Monolithic block direct solver
 #
@@ -256,7 +259,6 @@ def block_direct_solver(a, a_p, L, bcs, V, Q, msh):
     if MPI.COMM_WORLD.rank == 0:
         print(f"(C) Norm of velocity coefficient vector (blocked, direct): {norm_u}")
         print(f"(C) Norm of pressure coefficient vector (blocked, direct): {norm_p}")
-
     return norm_u, norm_p, u_h, p_h
 
 def run_on_mesh(nx, ny, solver=block_direct_solver, y_min=y_min, y_max=y_max, x_min=x_min, x_max=x_max):
@@ -270,11 +272,13 @@ def run_on_mesh(nx, ny, solver=block_direct_solver, y_min=y_min, y_max=y_max, x_
     V, Q = functionspace(msh, P2), functionspace(msh, P1)
 
     # Dirichlet BC
-    def noslip_boundary(x):
+    def boundary(x):
         return on_boundary(x, x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max)
-    noslip = np.zeros(msh.geometry.dim, dtype=PETSc.ScalarType)
-    facets = locate_entities_boundary(msh, 1, noslip_boundary)
-    bc = dirichletbc(noslip, locate_dofs_topological(V, 1, facets), V)
+
+    boundary_v = Function(V)
+    boundary_v.interpolate(u_analytical)
+    facets = locate_entities_boundary(msh, 1, boundary)
+    bc = dirichletbc(boundary_v, locate_dofs_topological(V, 1, facets))
     bcs = [bc]
 
     # Variational problem
@@ -285,7 +289,7 @@ def run_on_mesh(nx, ny, solver=block_direct_solver, y_min=y_min, y_max=y_max, x_
     f = fem.Function(V)
     f.interpolate(lambda x: f_analytical(x))
 
-    a = form([[inner(grad(u), grad(v)) * dx, inner(p, div(v)) * dx],
+    a = form([[inner(grad(u), grad(v)) * dx, -inner(p, div(v)) * dx],
               [inner(div(u), q) * dx, None]])
     L = form([inner(f, v) * dx, inner(Constant(msh, PETSc.ScalarType(0)), q) * dx])
 
@@ -307,27 +311,34 @@ def run_on_mesh(nx, ny, solver=block_direct_solver, y_min=y_min, y_max=y_max, x_
 
     # L2 error
     u_error_form = form(inner(u_h - u_ana, u_h - u_ana) * dx)
-    err_u = math.sqrt(msh.comm.allreduce(fem.assemble_scalar(u_error_form), op=MPI.SUM))
+    err_u = np.sqrt(msh.comm.allreduce(fem.assemble_scalar(u_error_form), op=MPI.SUM))
 
     p_error_form = form(inner(p_h - p_ana, p_h - p_ana) * dx)
-    err_p = math.sqrt(msh.comm.allreduce(fem.assemble_scalar(p_error_form), op=MPI.SUM))
+    err_p = np.sqrt(msh.comm.allreduce(fem.assemble_scalar(p_error_form), op=MPI.SUM))
+
+    # simpler: compute L2 of strong residual components:
+    res_form = form(inner(-div(grad(u_h)) + grad(p_h) - f, -div(grad(u_h)) + grad(p_h) - f) * dx)
+    res_norm = math.sqrt(msh.comm.allreduce(fem.assemble_scalar(res_form), op=MPI.SUM))
+    div_norm = math.sqrt(msh.comm.allreduce(fem.assemble_scalar(form(div(u_h)**2 * dx)), op=MPI.SUM))
+    print("strong residual norm:", res_norm, "divergence norm:", div_norm)
 
     return norm_u, norm_p, norm_u_ana, norm_p_ana, err_u, err_p
 
-mesh_sizes = [4, 8, 16, 32, 64, 128]  # you can change or extend
+mesh_sizes = [4, 8, 16, 32, 64]  # you can change or extend
+#mesh_sizes = [4]
 errs_u = []
 errs_p = []
 norms_u = []
 norms_p = []
 for n in mesh_sizes:
-    nu, np_, norm_u_ana, norm_p_ana, err_u_L2, err_p_L2 = run_on_mesh(n, n, solver=block_direct_solver)
+    nu, np_, norm_u_ana, norm_p_ana, err_u_L2, err_p_L2 = run_on_mesh(n, n, solver=block_iterative_solver)
     norms_u.append(nu) 
     norms_p.append(np_)
     errs_u.append(err_u_L2)
     errs_p.append(err_p_L2)
 
-    print(f"Norm of velocity analitical coefficient vector:  {norm_u_ana}")
-    print(f"Norm of pressure analitical coefficient vector:  {norm_p_ana}")
+    print(f"Norm of velocity analitycal coefficient vector:  {norm_u_ana}")
+    print(f"Norm of pressure analitycal coefficient vector:  {norm_p_ana}")
     
     print(f"Norm of velocity error:  {err_u_L2}")
     print(f"Norm of pressure error:  {err_p_L2}")
