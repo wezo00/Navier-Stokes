@@ -331,7 +331,7 @@ errs_p = []
 norms_u = []
 norms_p = []
 for n in mesh_sizes:
-    nu, np_, norm_u_ana, norm_p_ana, err_u_L2, err_p_L2 = run_on_mesh(n, n, solver=block_iterative_solver)
+    nu, np_, norm_u_ana, norm_p_ana, err_u_L2, err_p_L2 = run_on_mesh(n, n, solver=block_direct_solver)
     norms_u.append(nu) 
     norms_p.append(np_)
     errs_u.append(err_u_L2)
